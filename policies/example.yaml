@@ -1,0 +1,15 @@
+# Policy config: which tool calls require a human approval gate before
+# the agent loop is allowed to execute them. Matched by the policy engine
+# built on Day 4.
+rules:
+  - tool_name: send_email
+    condition: null
+    requires_approval: true
+
+  - tool_name: execute_sql
+    condition: "operation in ['DELETE', 'DROP', 'UPDATE']"
+    requires_approval: true
+
+  - tool_name: web_search
+    condition: null
+    requires_approval: false
