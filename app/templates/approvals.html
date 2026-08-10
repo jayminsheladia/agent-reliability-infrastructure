@@ -1,0 +1,63 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Pending Approvals</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin: 2rem; color: #222; }
+    h1 { font-size: 1.1rem; font-weight: 600; }
+    table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+    th, td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid #ddd; vertical-align: top; }
+    th { background: #f5f5f5; font-size: 0.8rem; text-transform: uppercase; color: #666; }
+    td.mono { font-family: ui-monospace, SFMono-Regular, monospace; font-size: 0.85rem; white-space: pre-wrap; max-width: 24rem; }
+    .empty { color: #666; margin-top: 1.5rem; }
+    button { padding: 0.3rem 0.8rem; margin-right: 0.4rem; cursor: pointer; border-radius: 4px; border: 1px solid #ccc; background: #fff; }
+    button.approve { border-color: #2a7a2a; color: #2a7a2a; }
+    button.reject { border-color: #a02a2a; color: #a02a2a; }
+  </style>
+</head>
+<body>
+  <h1>Pending Approvals</h1>
+
+  {% if approvals %}
+    <table>
+      <thead>
+        <tr>
+          <th>Run</th>
+          <th>Step</th>
+          <th>Agent</th>
+          <th>Tool</th>
+          <th>Arguments</th>
+          <th>Created</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="approvals-body">
+        {% for a in approvals %}
+        <tr id="row-{{ a.id }}">
+          <td class="mono">{{ a.run_id }}</td>
+          <td>{{ a.step_index }}</td>
+          <td>{{ a.agent_id }}</td>
+          <td>{{ a.tool_name }}</td>
+          <td class="mono">{{ a.arguments }}</td>
+          <td>{{ a.created_at }}</td>
+          <td>
+            <button class="approve" onclick="act('{{ a.id }}', 'approve')">Approve</button>
+            <button class="reject" onclick="act('{{ a.id }}', 'reject')">Reject</button>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="empty">No pending approvals.</p>
+  {% endif %}
+
+  <script>
+    async function act(id, action) {
+      await fetch(`/approvals/${id}/${action}`, { method: "POST" });
+      location.reload();
+    }
+  </script>
+</body>
+</html>

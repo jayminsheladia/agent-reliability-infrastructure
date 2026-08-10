@@ -13,3 +13,7 @@ rules:
   - tool_name: web_search
     condition: null
     requires_approval: false
+
+  - tool_name: execute_action
+    condition: "amount > 100"
+    requires_approval: true
