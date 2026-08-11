@@ -1,7 +1,9 @@
 import uuid
 
 from app.db import SessionLocal
+from app.embeddings import embed_text
 from app.models.event import EventLog
+from app.state_text import extract_text
 
 
 def emit_event(
@@ -22,6 +24,9 @@ def emit_event(
     durable the moment it completes — independent of whatever happens
     later in the run.
     """
+    text_for_embedding = extract_text(output_state)
+    embedding = embed_text(text_for_embedding) if text_for_embedding else None
+
     db = SessionLocal()
     try:
         event = EventLog(
@@ -35,6 +40,7 @@ def emit_event(
             tokens_used=tokens_used,
             latency_ms=latency_ms,
             parent_step_id=parent_step_id,
+            embedding=embedding,
         )
         db.add(event)
         db.commit()

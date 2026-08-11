@@ -1,4 +1,3 @@
-import json
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -7,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.event import EventLog
+from app.state_text import extract_text
 
 PREVIEW_LENGTH = 200
 
@@ -21,19 +21,12 @@ class TraceStepView:
     latency_ms: int
     timestamp: datetime
     parent_step_id: uuid.UUID | None
+    context_used: list[str]
 
 
 def summarize_state(state: dict) -> str:
     """Render a JSONB state column as a short, human-readable preview."""
-    if not state:
-        return ""
-
-    if isinstance(state, dict) and isinstance(state.get("text"), str):
-        text = state["text"]
-    else:
-        text = json.dumps(state, separators=(",", ":"))
-
-    text = text.strip()
+    text = extract_text(state).strip()
     if len(text) > PREVIEW_LENGTH:
         return text[:PREVIEW_LENGTH] + "…"
     return text
@@ -59,6 +52,11 @@ def get_trace(db: Session, run_id: uuid.UUID) -> list[TraceStepView]:
             latency_ms=event.latency_ms,
             timestamp=event.timestamp,
             parent_step_id=event.parent_step_id,
+            context_used=(
+                event.input_state.get("context_used", [])
+                if isinstance(event.input_state, dict)
+                else []
+            ),
         )
         for event in events
     ]

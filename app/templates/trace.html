@@ -13,6 +13,9 @@
     td.mono { font-family: ui-monospace, SFMono-Regular, monospace; font-size: 0.85rem; white-space: pre-wrap; max-width: 28rem; }
     .meta { color: #666; font-size: 0.85rem; }
     .empty { color: #666; margin-top: 1.5rem; }
+    .context-used { list-style: none; margin: 0; padding: 0; font-family: ui-monospace, SFMono-Regular, monospace; font-size: 0.78rem; }
+    .context-used li { background: #eef4ff; border-radius: 4px; padding: 0.1rem 0.35rem; margin-bottom: 0.2rem; }
+    .context-none { color: #999; font-size: 0.85rem; }
   </style>
 </head>
 <body>
@@ -27,6 +30,7 @@
           <th>Agent</th>
           <th>Input</th>
           <th>Output</th>
+          <th>Context Used</th>
           <th>Tokens</th>
           <th>Latency</th>
           <th>Timestamp</th>
@@ -39,6 +43,17 @@
           <td>{{ step.agent_id }}</td>
           <td class="mono">{{ step.input_preview }}</td>
           <td class="mono">{{ step.output_preview }}</td>
+          <td>
+            {% if step.context_used %}
+            <ul class="context-used">
+              {% for event_id in step.context_used %}
+              <li title="{{ event_id }}">{{ event_id[:8] }}</li>
+              {% endfor %}
+            </ul>
+            {% else %}
+            <span class="context-none">—</span>
+            {% endif %}
+          </td>
           <td>{{ step.tokens_used }}</td>
           <td>{{ step.latency_ms }}ms</td>
           <td>{{ step.timestamp }}</td>

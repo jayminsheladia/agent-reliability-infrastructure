@@ -31,6 +31,8 @@ def cmd_trace(run_id_str: str) -> int:
         )
         print(f"    in:  {step.input_preview}")
         print(f"    out: {step.output_preview}")
+        if step.context_used:
+            print(f"    context_used: {step.context_used}")
         print()
 
     return 0

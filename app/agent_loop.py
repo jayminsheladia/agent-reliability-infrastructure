@@ -2,19 +2,37 @@ import sys
 import uuid
 
 from app.approvals.gate import propose_and_run_tool_call
+from app.db import SessionLocal
 from app.events import emit_event
 from app.llm import call_llm
+from app.retrieval import get_relevant_context
 
+# (agent_id, prompt_template, need, k) — need=None means "no retrieval, use
+# the raw prior context directly" (only true for the first step, which has
+# no prior events to retrieve from). k is how many prior events to pull in;
+# reviewer uses k=1 deliberately so retrieval visibly picks one candidate
+# over the other rather than just re-ranking everything available.
 LLM_STEPS = [
-    ("researcher", "Research the topic below and list 3-5 key facts.\n\nTopic: {context}"),
-    ("drafter", "Using this research, write a short draft paragraph.\n\nResearch:\n{context}"),
-    ("reviewer", "Review this draft and give brief, actionable feedback.\n\nDraft:\n{context}"),
+    ("researcher", "Research the topic below and list 3-5 key facts.\n\nTopic: {context}", None, None),
+    (
+        "drafter",
+        "Using this research, write a short draft paragraph.\n\nResearch:\n{context}",
+        "research findings and key facts about the topic",
+        3,
+    ),
+    (
+        "reviewer",
+        "Review this draft and give brief, actionable feedback.\n\nDraft:\n{context}",
+        "the draft content and any research findings related to it",
+        1,
+    ),
 ]
 
 # (agent_id, tool_name, build_arguments) — deterministic placeholder tool calls
 # that exercise the policy gate: notifier always requires approval (Day 1's
 # unconditional send_email rule), executor requires approval conditionally
-# (amount > 100).
+# (amount > 100). Unaffected by Day 5's retrieval work — still receive the
+# raw immediately-prior step's output, same as Day 4.
 TOOL_STEPS = [
     ("notifier", "send_email", lambda context: {"to": "team@example.com", "body": context}),
     ("executor", "execute_action", lambda context: {"action_type": "archive_run", "amount": 250}),
@@ -27,9 +45,21 @@ def run_pipeline(topic: str) -> uuid.UUID:
     context = topic
     step_index = 0
 
-    for agent_id, prompt_template in LLM_STEPS:
-        prompt = prompt_template.format(context=context)
-        input_state = {"text": context}
+    for agent_id, prompt_template, need, k in LLM_STEPS:
+        if need is None:
+            context_text = context
+            context_used_ids: list[str] = []
+        else:
+            db = SessionLocal()
+            try:
+                retrieved = get_relevant_context(db, run_id, agent_id, step_index, need, k=k)
+            finally:
+                db.close()
+            context_text = "\n\n".join(f"[{r.agent_id} step {r.step_index}]: {r.text}" for r in retrieved)
+            context_used_ids = [str(r.event_id) for r in retrieved]
+
+        prompt = prompt_template.format(context=context_text)
+        input_state = {"text": context_text, "context_used": context_used_ids}
 
         result = call_llm(prompt)
         output_state = {"text": result.text}
