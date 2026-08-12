@@ -39,3 +39,7 @@ class EventLog(Base):
     )
 
     embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
+
+    # "step" for a normal step; "loop_detected" / "cost_anomaly" for a
+    # detector marker row written by app/anomaly/markers.py.
+    event_type: Mapped[str] = mapped_column(String, nullable=False, default="step")

@@ -17,6 +17,7 @@ def emit_event(
     tokens_used: int,
     latency_ms: int,
     parent_step_id: uuid.UUID | None,
+    event_type: str = "step",
 ) -> uuid.UUID:
     """The contract between an agent step and the observability layer.
 
@@ -41,6 +42,7 @@ def emit_event(
             latency_ms=latency_ms,
             parent_step_id=parent_step_id,
             embedding=embedding,
+            event_type=event_type,
         )
         db.add(event)
         db.commit()

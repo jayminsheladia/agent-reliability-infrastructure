@@ -35,7 +35,10 @@ def get_relevant_context(
     recency: score = similarity * exp(-decay_rate * steps_ago).
 
     Only looks backward (step_index < requesting_step_index) — an agent
-    can't retrieve context from a step that hasn't happened yet.
+    can't retrieve context from a step that hasn't happened yet. Only
+    considers event_type="step" rows — Day 6's anomaly markers share a
+    step_index with the event that triggered them and aren't a prior
+    agent's output, so they shouldn't be retrievable as context.
     """
     candidates = (
         db.execute(
@@ -43,6 +46,7 @@ def get_relevant_context(
                 EventLog.run_id == run_id,
                 EventLog.step_index < requesting_step_index,
                 EventLog.embedding.isnot(None),
+                EventLog.event_type == "step",
             )
         )
         .scalars()

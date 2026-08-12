@@ -25,9 +25,10 @@ def cmd_trace(run_id_str: str) -> int:
 
     print(f"Trace for run {run_id} ({len(steps)} step{'s' if len(steps) != 1 else ''})\n")
     for step in steps:
+        flag = f"  !!! {step.event_type.upper()} !!!" if step.event_type != "step" else ""
         print(
             f"[{step.step_index}] {step.agent_id}"
-            f"  ({step.tokens_used} tokens, {step.latency_ms}ms, {step.timestamp})"
+            f"  ({step.tokens_used} tokens, {step.latency_ms}ms, {step.timestamp}){flag}"
         )
         print(f"    in:  {step.input_preview}")
         print(f"    out: {step.output_preview}")

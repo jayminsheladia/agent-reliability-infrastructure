@@ -22,6 +22,7 @@ class TraceStepView:
     timestamp: datetime
     parent_step_id: uuid.UUID | None
     context_used: list[str]
+    event_type: str
 
 
 def summarize_state(state: dict) -> str:
@@ -34,10 +35,14 @@ def summarize_state(state: dict) -> str:
 
 def get_trace(db: Session, run_id: uuid.UUID) -> list[TraceStepView]:
     """The ordered event sequence for a run — the single query both the CLI
-    and the web route render from."""
+    and the web route render from. Ordered by (step_index, timestamp) so a
+    Day 6 anomaly marker — which reuses its triggering step's step_index
+    rather than claiming a new one — still sorts right after it."""
     events = (
         db.execute(
-            select(EventLog).where(EventLog.run_id == run_id).order_by(EventLog.step_index)
+            select(EventLog)
+            .where(EventLog.run_id == run_id)
+            .order_by(EventLog.step_index, EventLog.timestamp)
         )
         .scalars()
         .all()
@@ -57,6 +62,7 @@ def get_trace(db: Session, run_id: uuid.UUID) -> list[TraceStepView]:
                 if isinstance(event.input_state, dict)
                 else []
             ),
+            event_type=event.event_type,
         )
         for event in events
     ]

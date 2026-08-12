@@ -16,6 +16,10 @@
     .context-used { list-style: none; margin: 0; padding: 0; font-family: ui-monospace, SFMono-Regular, monospace; font-size: 0.78rem; }
     .context-used li { background: #eef4ff; border-radius: 4px; padding: 0.1rem 0.35rem; margin-bottom: 0.2rem; }
     .context-none { color: #999; font-size: 0.85rem; }
+    tr.anomaly-row { background: #fff4f4; }
+    .flag { display: inline-block; font-size: 0.75rem; font-weight: 600; padding: 0.15rem 0.5rem; border-radius: 4px; margin-left: 0.5rem; }
+    .flag-loop_detected { background: #ffdddd; color: #a02a2a; }
+    .flag-cost_anomaly { background: #fff0d6; color: #9a6a00; }
   </style>
 </head>
 <body>
@@ -38,9 +42,14 @@
       </thead>
       <tbody>
         {% for step in steps %}
-        <tr>
+        <tr class="{{ 'anomaly-row' if step.event_type != 'step' else '' }}">
           <td>{{ step.step_index }}</td>
-          <td>{{ step.agent_id }}</td>
+          <td>
+            {{ step.agent_id }}
+            {% if step.event_type != 'step' %}
+            <span class="flag flag-{{ step.event_type }}">{{ step.event_type }}</span>
+            {% endif %}
+          </td>
           <td class="mono">{{ step.input_preview }}</td>
           <td class="mono">{{ step.output_preview }}</td>
           <td>
