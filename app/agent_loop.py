@@ -8,7 +8,7 @@ from app.approvals.gate import propose_and_run_tool_call
 from app.config import settings
 from app.db import SessionLocal
 from app.events import emit_event
-from app.llm import call_llm
+from app.llm import LLMResult, call_llm
 from app.retrieval import get_relevant_context
 
 # (agent_id, prompt_template, need, k) — need=None means "no retrieval, use
@@ -32,15 +32,33 @@ LLM_STEPS = [
     ),
 ]
 
-# (agent_id, tool_name, build_arguments) — deterministic placeholder tool calls
-# that exercise the policy gate: notifier always requires approval (Day 1's
-# unconditional send_email rule), executor requires approval conditionally
-# (amount > 100). Unaffected by Day 5's retrieval work — still receive the
-# raw immediately-prior step's output, same as Day 4.
+# demo:success — (agent_id, tool_name, build_arguments). Deterministic
+# placeholder tool calls that exercise the policy gate: notifier always
+# requires approval (Day 1's unconditional send_email rule), executor
+# requires approval conditionally (amount > 100).
 TOOL_STEPS = [
     ("notifier", "send_email", lambda context: {"to": "team@example.com", "body": context}),
     ("executor", "execute_action", lambda context: {"action_type": "archive_run", "amount": 250}),
 ]
+
+# demo:loop — the same (agent_id, tool_name, args) triple 5 times, past
+# Day 6's default threshold of 3. amount=10 stays under the execute_action
+# policy's "amount > 100" gate, so each call executes immediately with no
+# approval needed — the demo is about loop detection, not approvals.
+LOOPING_TOOL_STEPS = [
+    ("looper", "execute_action", lambda context: {"action_type": "ping", "amount": 10}),
+] * 5
+
+# demo:cost — the simulated token count for the deliberately "expensive"
+# step, set above the default cost_hard_threshold_tokens (5000) so the
+# hard-threshold trigger fires without an actually large real API spend.
+SIMULATED_EXPENSIVE_TOKENS = 6000
+
+
+def _mock_call_llm(prompt: str, system: str | None = None) -> LLMResult:
+    """Free, deterministic stand-in for call_llm() — used by --mock and by
+    the test suite so neither requires ANTHROPIC_API_KEY or spends money."""
+    return LLMResult(text=f"[mocked response to: {prompt[:60]}...]", tokens_used=42, latency_ms=7)
 
 
 class RunKilledError(Exception):
@@ -135,71 +153,123 @@ def _check_loop(run_id, agent_id, step_index, parent_step_id, tool_name, argumen
         raise RunKilledError(reason)
 
 
-def run_pipeline(topic: str) -> uuid.UUID:
+def _run_llm_steps(llm_fn, run_id, step_index, parent_step_id, context) -> tuple[int, uuid.UUID | None, str]:
+    for agent_id, prompt_template, need, k in LLM_STEPS:
+        if need is None:
+            context_text = context
+            context_used_ids: list[str] = []
+        else:
+            db = SessionLocal()
+            try:
+                retrieved = get_relevant_context(db, run_id, agent_id, step_index, need, k=k)
+            finally:
+                db.close()
+            context_text = "\n\n".join(f"[{r.agent_id} step {r.step_index}]: {r.text}" for r in retrieved)
+            context_used_ids = [str(r.event_id) for r in retrieved]
+
+        prompt = prompt_template.format(context=context_text)
+        input_state = {"text": context_text, "context_used": context_used_ids}
+
+        result = llm_fn(prompt)
+        output_state = {"text": result.text}
+
+        parent_step_id = emit_event(
+            run_id=run_id,
+            agent_id=agent_id,
+            step_index=step_index,
+            input_state=input_state,
+            output_state=output_state,
+            tool_calls=[],
+            tokens_used=result.tokens_used,
+            latency_ms=result.latency_ms,
+            parent_step_id=parent_step_id,
+        )
+        _check_cost_anomalies(run_id, agent_id, step_index, parent_step_id, result.tokens_used)
+
+        context = result.text
+        step_index += 1
+
+    return step_index, parent_step_id, context
+
+
+def _run_tool_steps(tool_steps, run_id, step_index, parent_step_id, context) -> None:
+    for agent_id, tool_name, build_arguments in tool_steps:
+        arguments = build_arguments(context)
+        input_state = {"text": context}
+
+        outcome = propose_and_run_tool_call(run_id, step_index, agent_id, tool_name, arguments)
+        output_state = {"text": outcome["result_text"]}
+
+        parent_step_id = emit_event(
+            run_id=run_id,
+            agent_id=agent_id,
+            step_index=step_index,
+            input_state=input_state,
+            output_state=output_state,
+            tool_calls=[outcome["tool_call_record"]],
+            tokens_used=0,
+            latency_ms=outcome["latency_ms"],
+            parent_step_id=parent_step_id,
+        )
+        _check_loop(run_id, agent_id, step_index, parent_step_id, tool_name, arguments)
+        _check_cost_anomalies(run_id, agent_id, step_index, parent_step_id, 0)
+
+        context = outcome["result_text"]
+        step_index += 1
+
+
+def _run_simulated_expensive_step(llm_fn, run_id, step_index, parent_step_id, context) -> None:
+    """demo:cost — a real (small) LLM call whose reported tokens_used is
+    overridden to a simulated large value, so the hard cost threshold
+    trips without an actually expensive API call. Clearly labeled as
+    simulated in the stored state, not silently misrepresented."""
+    prompt = f"In one sentence, summarize: {context}"
+    result = llm_fn(prompt)
+
+    input_state = {
+        "text": context,
+        "context_used": [],
+        "note": "tokens_used below is simulated for the cost-anomaly demo, not the real API cost",
+    }
+    output_state = {"text": result.text}
+
+    parent_step_id = emit_event(
+        run_id=run_id,
+        agent_id="summarizer",
+        step_index=step_index,
+        input_state=input_state,
+        output_state=output_state,
+        tool_calls=[],
+        tokens_used=SIMULATED_EXPENSIVE_TOKENS,
+        latency_ms=result.latency_ms,
+        parent_step_id=parent_step_id,
+    )
+    _check_cost_anomalies(run_id, "summarizer", step_index, parent_step_id, SIMULATED_EXPENSIVE_TOKENS)
+
+
+def run_pipeline(topic: str, mode: str = "success", mock_llm: bool = False) -> uuid.UUID:
+    """mode="success": full pipeline, ends by hitting the approval gate
+    twice. mode="loop": same 3 LLM steps, then a repeated tool call that
+    trips loop detection and kills the run. mode="cost": same 3 LLM
+    steps, then one deliberately "expensive" step that trips the cost
+    hard threshold (flag-only, run still completes)."""
+    if mode not in ("success", "loop", "cost"):
+        raise ValueError(f"unknown mode {mode!r}, expected 'success', 'loop', or 'cost'")
+
+    llm_fn = _mock_call_llm if mock_llm else call_llm
     run_id = uuid.uuid4()
-    parent_step_id: uuid.UUID | None = None
-    context = topic
     step_index = 0
+    parent_step_id: uuid.UUID | None = None
 
     try:
-        for agent_id, prompt_template, need, k in LLM_STEPS:
-            if need is None:
-                context_text = context
-                context_used_ids: list[str] = []
-            else:
-                db = SessionLocal()
-                try:
-                    retrieved = get_relevant_context(db, run_id, agent_id, step_index, need, k=k)
-                finally:
-                    db.close()
-                context_text = "\n\n".join(f"[{r.agent_id} step {r.step_index}]: {r.text}" for r in retrieved)
-                context_used_ids = [str(r.event_id) for r in retrieved]
+        step_index, parent_step_id, context = _run_llm_steps(llm_fn, run_id, step_index, parent_step_id, topic)
 
-            prompt = prompt_template.format(context=context_text)
-            input_state = {"text": context_text, "context_used": context_used_ids}
-
-            result = call_llm(prompt)
-            output_state = {"text": result.text}
-
-            parent_step_id = emit_event(
-                run_id=run_id,
-                agent_id=agent_id,
-                step_index=step_index,
-                input_state=input_state,
-                output_state=output_state,
-                tool_calls=[],
-                tokens_used=result.tokens_used,
-                latency_ms=result.latency_ms,
-                parent_step_id=parent_step_id,
-            )
-            _check_cost_anomalies(run_id, agent_id, step_index, parent_step_id, result.tokens_used)
-
-            context = result.text
-            step_index += 1
-
-        for agent_id, tool_name, build_arguments in TOOL_STEPS:
-            arguments = build_arguments(context)
-            input_state = {"text": context}
-
-            outcome = propose_and_run_tool_call(run_id, step_index, agent_id, tool_name, arguments)
-            output_state = {"text": outcome["result_text"]}
-
-            parent_step_id = emit_event(
-                run_id=run_id,
-                agent_id=agent_id,
-                step_index=step_index,
-                input_state=input_state,
-                output_state=output_state,
-                tool_calls=[outcome["tool_call_record"]],
-                tokens_used=0,
-                latency_ms=outcome["latency_ms"],
-                parent_step_id=parent_step_id,
-            )
-            _check_loop(run_id, agent_id, step_index, parent_step_id, tool_name, arguments)
-            _check_cost_anomalies(run_id, agent_id, step_index, parent_step_id, 0)
-
-            context = outcome["result_text"]
-            step_index += 1
+        if mode == "success":
+            _run_tool_steps(TOOL_STEPS, run_id, step_index, parent_step_id, context)
+        elif mode == "loop":
+            _run_tool_steps(LOOPING_TOOL_STEPS, run_id, step_index, parent_step_id, context)
+        else:  # "cost"
+            _run_simulated_expensive_step(llm_fn, run_id, step_index, parent_step_id, context)
     except RunKilledError as e:
         print(f"[agent_loop] RUN KILLED: {e.reason}")
 

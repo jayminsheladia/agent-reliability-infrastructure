@@ -23,6 +23,7 @@ def propose_and_run_tool_call(
     if evaluate_policy(tool_name, arguments):
         approval = queue.create_approval(run_id, step_index, agent_id, tool_name, arguments)
         print(f"[{agent_id}] {tool_name} requires approval -> pending as {approval.id}. Waiting...")
+        print("  Review it at http://localhost:8000/approvals/ui (or GET /approvals for JSON).")
 
         resolved = queue.wait_for_resolution(
             approval.id, POLL_INTERVAL_SECONDS, APPROVAL_TIMEOUT_SECONDS
